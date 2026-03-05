@@ -1,0 +1,249 @@
+name: Meta Ads
+shortDescription: Analyze, manage, and optimize Meta (Facebook & Instagram) ad campaigns with AI via MCP.
+description: |
+  A Model Context Protocol (MCP) server for interacting with Meta Ads. Analyze, manage and optimize Meta
+  advertising campaigns through an AI interface. Use an LLM to retrieve performance data, visualize ad
+  creatives, and provide strategic insights for your ads on Facebook, Instagram, and other Meta platforms.
+
+  DISCLAIMER: This is an unofficial third-party tool and is not associated with, endorsed by, or affiliated
+  with Meta in any way. This project is maintained independently and uses Meta's public APIs according to
+  their terms of service. Meta, Facebook, Instagram, and other Meta brand names are trademarks of their
+  respective owners.
+
+  Features:
+  - AI-powered campaign analysis and strategic recommendations
+  - Budget optimization and performance monitoring
+  - Creative analysis and dynamic creative testing
+  - Campaign, ad set, and ad management
+  - Enhanced search across accounts, campaigns, ads, and pages
+  - Streamable HTTP transport for easy integration as an HTTP API
+
+  Runtime notes:
+  - This configuration assumes the container image starts the Meta Ads MCP server in streamable HTTP mode
+    and listens on port 8080 at the /mcp endpoint, e.g.:
+    python -m meta_ads_mcp --transport streamable-http --host 0.0.0.0 --port 8080
+
+toolPreview:
+  # Accounts & basic info
+  - name: mcp_meta_ads_get_ad_accounts
+    description: Get ad accounts accessible by a user.
+    params:
+      user_id: Meta user ID or "me"
+      limit: Maximum number of accounts to return
+  - name: mcp_meta_ads_get_account_info
+    description: Get detailed information about a specific ad account.
+    params:
+      account_id: Meta Ads account ID (e.g. act_XXXXXXXXX)
+  - name: mcp_meta_ads_get_account_pages
+    description: List pages associated with an ad account or user.
+    params:
+      account_id: Meta Ads account ID or "me"
+
+  # Campaigns
+  - name: mcp_meta_ads_get_campaigns
+    description: List campaigns for an ad account with optional status filtering.
+    params:
+      account_id: Meta Ads account ID
+      limit: Maximum number of campaigns
+      status_filter: Optional status filter (e.g. ACTIVE, PAUSED)
+  - name: mcp_meta_ads_get_campaign_details
+    description: Get detailed information about a specific campaign.
+    params:
+      campaign_id: Meta Ads campaign ID
+  - name: mcp_meta_ads_create_campaign
+    description: Create a new outcome-based campaign in an ad account.
+    params:
+      account_id: Meta Ads account ID
+      name: Campaign name
+      objective: Outcome objective (e.g. OUTCOME_AWARENESS, OUTCOME_SALES)
+      status: Initial status (e.g. PAUSED)
+      daily_budget: Daily budget in account currency (cents)
+      lifetime_budget: Lifetime budget in account currency (cents)
+      bid_strategy: Bid strategy (e.g. LOWEST_COST_WITHOUT_CAP)
+
+  # Ad sets
+  - name: mcp_meta_ads_get_adsets
+    description: List ad sets for an account, optionally filtered by campaign.
+    params:
+      account_id: Meta Ads account ID
+      limit: Maximum number of ad sets
+      campaign_id: Optional campaign filter
+  - name: mcp_meta_ads_get_adset_details
+    description: Get detailed information about a specific ad set.
+    params:
+      adset_id: Meta Ads ad set ID
+  - name: mcp_meta_ads_create_adset
+    description: Create a new ad set with targeting, budget, and bidding settings.
+    params:
+      account_id: Meta Ads account ID
+      campaign_id: Parent campaign ID
+      name: Ad set name
+      status: Initial status
+      daily_budget: Daily budget (cents, string)
+      lifetime_budget: Lifetime budget (cents, string)
+      targeting: Targeting specification object
+      optimization_goal: Optimization goal (e.g. LINK_CLICKS)
+      billing_event: Billing event (e.g. IMPRESSIONS)
+      bid_strategy: Bid strategy
+  - name: mcp_meta_ads_update_adset
+    description: Update an ad set, including frequency caps, bidding, and targeting.
+    params:
+      adset_id: Meta Ads ad set ID
+      frequency_control_specs: Frequency control specifications
+      bid_strategy: Bid strategy
+      bid_amount: Bid amount in cents
+      status: Updated status
+      targeting: Updated targeting specification
+
+  # Ads & creatives
+  - name: mcp_meta_ads_get_ads
+    description: List ads for an account with optional campaign/ad set filters.
+    params:
+      account_id: Meta Ads account ID
+      limit: Maximum number of ads
+      campaign_id: Optional campaign ID filter
+      adset_id: Optional ad set ID filter
+  - name: mcp_meta_ads_get_ad_details
+    description: Get detailed information about a specific ad.
+    params:
+      ad_id: Meta Ads ad ID
+  - name: mcp_meta_ads_create_ad
+    description: Create a new ad from an existing creative.
+    params:
+      account_id: Meta Ads account ID
+      name: Ad name
+      adset_id: Parent ad set ID
+      creative_id: Creative ID to use
+      status: Initial ad status
+  - name: mcp_meta_ads_update_ad
+    description: Update an existing ad (e.g. status or bid amount).
+    params:
+      ad_id: Meta Ads ad ID
+      status: New status (e.g. ACTIVE, PAUSED)
+      bid_amount: Bid amount in cents
+  - name: mcp_meta_ads_get_ad_creatives
+    description: Get creative details for a specific ad.
+    params:
+      ad_id: Meta Ads ad ID
+  - name: mcp_meta_ads_create_ad_creative
+    description: Create a new creative using an uploaded image and text assets.
+    params:
+      account_id: Meta Ads account ID
+      name: Creative name
+      image_hash: Uploaded image hash
+      page_id: Facebook Page ID
+      link_url: Destination URL
+      message: Ad text
+      headline: Headline or list of headlines
+      description: Description or list of descriptions
+  - name: mcp_meta_ads_update_ad_creative
+    description: Update an existing creative with new text or settings.
+    params:
+      creative_id: Creative ID
+      message: Updated ad text
+      headline: Updated headline or headlines
+      description: Updated description or descriptions
+  - name: mcp_meta_ads_upload_ad_image
+    description: Upload an image to use in Meta Ads creatives.
+    params:
+      account_id: Meta Ads account ID
+      image_path: Path to the image file
+      name: Optional image name
+  - name: mcp_meta_ads_get_ad_image
+    description: Retrieve and visualize a Meta ad image in one step.
+    params:
+      ad_id: Meta Ads ad ID
+
+  # Insights & optimization
+  - name: mcp_meta_ads_get_insights
+    description: Get performance insights for a campaign, ad set, ad, or account.
+    params:
+      object_id: ID of the campaign, ad set, ad, or account
+      time_range: Time range (e.g. last_30d)
+      breakdown: Optional breakdown (e.g. age, gender, country)
+      level: Aggregation level (ad, adset, campaign, account)
+      action_attribution_windows: Optional attribution windows list
+  - name: mcp_meta_ads_create_budget_schedule
+    description: Create a temporary budget schedule for a high-demand period.
+    params:
+      campaign_id: Campaign ID
+      budget_value: Budget increase amount
+      budget_value_type: Type of value (ABSOLUTE or MULTIPLIER)
+      time_start: Start time (Unix timestamp)
+      time_end: End time (Unix timestamp)
+
+  # Targeting & search helpers
+  - name: mcp_meta_ads_search_interests
+    description: Search interest targeting options by keyword.
+    params:
+      query: Interest search term
+      limit: Maximum number of interests
+  - name: mcp_meta_ads_get_interest_suggestions
+    description: Get interest suggestions based on existing interests.
+    params:
+      interest_list: List of base interest names
+      limit: Maximum number of suggestions
+  - name: mcp_meta_ads_validate_interests
+    description: Validate interest names or IDs for targeting.
+    params:
+      interest_list: List of interest names
+      interest_fbid_list: List of interest IDs
+  - name: mcp_meta_ads_search_behaviors
+    description: List available behavior targeting options.
+    params:
+      limit: Maximum number of results
+  - name: mcp_meta_ads_search_demographics
+    description: Get demographic targeting options.
+    params:
+      demographic_class: Demographic category (e.g. demographics, life_events)
+      limit: Maximum number of results
+  - name: mcp_meta_ads_search_geo_locations
+    description: Search for geographic targeting locations.
+    params:
+      query: Location search term
+      location_types: Location types (country, region, city, etc.)
+      limit: Maximum number of results
+  - name: mcp_meta_ads_search
+    description: Enhanced generic search across accounts, campaigns, ads, and pages.
+    params:
+      query: Free-form search query string
+
+  # Auth & login utilities
+  - name: mcp_meta_ads_get_login_link
+    description: Get a clickable login link for Meta Ads authentication.
+    params:
+      access_token: Optional existing access token (usually omitted)
+
+metadata:
+  categories: Advertising, Analytics
+  allow-multiple: "true"
+icon: https://lobehub.com/badge/mcp/nictuku-meta-ads-mcp
+repoURL: https://github.com/M-C-Saatchi-Performance/meta-ads-mcp/
+
+runtime: containerized
+containerizedConfig:
+  image: ghcr.io/m-c-saatchi-performance/meta-ads-mcp:main
+  port: 8080
+  path: "/mcp"
+
+env:
+  - key: PIPEBOARD_API_TOKEN
+    name: Pipeboard API Token
+    required: false
+    sensitive: true
+    description: Pipeboard API token used for Meta Ads authentication and API access. Get a token at https://pipeboard.co/api-tokens.
+  - key: META_APP_ID
+    name: Meta App ID
+    required: false
+    sensitive: true
+    description: Optional Meta Developer App ID (client ID) for advanced direct Meta OAuth flows when not using Pipeboard.
+  - key: META_APP_SECRET
+    name: Meta App Secret
+    required: false
+    sensitive: true
+    description: Optional Meta Developer App secret for advanced direct Meta OAuth flows.
+  - key: META_ACCESS_TOKEN
+    name: Meta Access Token
+    required: false
+    sensitive: true
+    description: Optional direct Meta access token for advanced use cases. Normally the Pipeboard token is preferred.
