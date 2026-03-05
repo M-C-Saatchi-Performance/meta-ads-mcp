@@ -67,7 +67,7 @@ async def get_adset_details(adset_id: str, access_token: Optional[str] = None) -
     endpoint = f"{adset_id}"
     # Explicitly prioritize frequency_control_specs in the fields request
     params = {
-        "fields": "id,name,campaign_id,status,frequency_control_specs{event,interval_days,max_frequency},daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,bid_constraints,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining,dsa_beneficiary,is_dynamic_creative"
+        "fields": "id,name,campaign_id,status,frequency_control_specs{event,interval_days,max_frequency},daily_budget,lifetime_budget,targeting,bid_amount,bid_strategy,bid_constraints,optimization_goal,billing_event,start_time,end_time,created_time,updated_time,attribution_spec,destination_type,promoted_object,pacing_type,budget_remaining,dsa_beneficiary,dsa_payor,is_dynamic_creative"
     }
     
     data = await make_api_request(endpoint, access_token, params)
@@ -99,6 +99,7 @@ async def create_adset(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     dsa_beneficiary: Optional[str] = None,
+    dsa_payor: Optional[str] = None,
     promoted_object: Optional[Dict[str, Any]] = None,
     destination_type: Optional[str] = None,
     is_dynamic_creative: Optional[bool] = None,
@@ -134,9 +135,15 @@ async def create_adset(
         bid_constraints: Bid constraints dict. Required for LOWEST_COST_WITH_MIN_ROAS.
                         Use {"roas_average_floor": <value>} where value = target ROAS * 10000.
                         Example: 2.0x ROAS -> {"roas_average_floor": 20000}
-        start_time: Start time in ISO 8601 format (e.g., '2023-12-01T12:00:00-0800')
-        end_time: End time in ISO 8601 format
-        dsa_beneficiary: DSA beneficiary for European compliance
+        start_time: Start time in ISO 8601 format (e.g., '2023-12-01T12:00:00-0800').
+                   To schedule future delivery: set start_time to a future date and status=ACTIVE.
+                   Meta will show effective_status as SCHEDULED and automatically begin delivery at start_time.
+                   NOTE: Only ad set start_time controls delivery scheduling. Campaigns do not support start_time.
+        end_time: End time in ISO 8601 format. Required when lifetime_budget is specified.
+        dsa_beneficiary: DSA beneficiary for European compliance (person/org that benefits from ads).
+                        Required for EU-targeted ad sets along with dsa_payor.
+        dsa_payor: DSA payor for European compliance (person/org paying for the ads).
+                   Required for EU-targeted ad sets along with dsa_beneficiary.
         promoted_object: App config for APP_INSTALLS. Required: application_id, object_store_url.
         destination_type: Where users go after click. Common values: 'WEBSITE', 'WHATSAPP', 'MESSENGER',
                          'INSTAGRAM_DIRECT', 'ON_AD', 'APP', 'FACEBOOK', 'SHOP_AUTOMATIC'.
@@ -322,10 +329,12 @@ async def create_adset(
     if end_time:
         params["end_time"] = end_time
     
-    # Add DSA beneficiary if provided
+    # Add DSA fields if provided (both required for EU-targeted ad sets)
     if dsa_beneficiary:
         params["dsa_beneficiary"] = dsa_beneficiary
-    
+    if dsa_payor:
+        params["dsa_payor"] = dsa_payor
+
     # Add mobile app parameters if provided
     if promoted_object:
         params["promoted_object"] = json.dumps(promoted_object)
@@ -380,6 +389,10 @@ async def update_adset(adset_id: str, frequency_control_specs: Optional[List[Dic
                         status: Optional[str] = None, targeting: Optional[Dict[str, Any]] = None,
                         optimization_goal: Optional[str] = None, daily_budget: Optional[int] = None, lifetime_budget: Optional[int] = None,
                         is_dynamic_creative: Optional[bool] = None,
+                        start_time: Optional[str] = None,
+                        end_time: Optional[str] = None,
+                        dsa_beneficiary: Optional[str] = None,
+                        dsa_payor: Optional[str] = None,
                         access_token: Optional[str] = None) -> str:
     """
     Update an ad set with new settings including frequency caps and budgets.
@@ -405,6 +418,13 @@ async def update_adset(adset_id: str, frequency_control_specs: Optional[List[Dic
         daily_budget: Daily budget in account currency (in cents)
         lifetime_budget: Lifetime budget in account currency (in cents)
         is_dynamic_creative: Enable/disable Dynamic Creative for this ad set.
+        start_time: Start time in ISO 8601 format (e.g., '2023-12-01T12:00:00-0800').
+                   Use with status=ACTIVE to schedule the ad set for future delivery (effective_status will be SCHEDULED until start_time).
+        end_time: End time in ISO 8601 format. Required when lifetime_budget is specified.
+        dsa_beneficiary: DSA beneficiary for European compliance (person/org that benefits from ads).
+                        Required for EU-targeted ad sets along with dsa_payor.
+        dsa_payor: DSA payor for European compliance (person/org paying for the ads).
+                   Required for EU-targeted ad sets along with dsa_beneficiary.
         access_token: Meta API access token (optional - will use cached token if not provided)
     """
     if not adset_id:
@@ -487,7 +507,19 @@ async def update_adset(adset_id: str, frequency_control_specs: Optional[List[Dic
     
     if is_dynamic_creative is not None:
         params['is_dynamic_creative'] = "true" if bool(is_dynamic_creative) else "false"
-    
+
+    if start_time is not None:
+        params['start_time'] = start_time
+
+    if end_time is not None:
+        params['end_time'] = end_time
+
+    if dsa_beneficiary is not None:
+        params['dsa_beneficiary'] = dsa_beneficiary
+
+    if dsa_payor is not None:
+        params['dsa_payor'] = dsa_payor
+
     if not params:
         return json.dumps({"error": "No update parameters provided"}, indent=2)
 

@@ -242,7 +242,7 @@ async def get_creative_details(creative_id: str, access_token: Optional[str] = N
     # "(#100) Tried accessing nonexisting field" on simple creatives in API v24.
     # We fetch the safe fields first, then try dynamic_creative_spec separately.
     params = {
-        "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,asset_feed_spec,url_tags,link_url"
+        "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,object_type,body,title,effective_object_story_id,asset_feed_spec{images,videos,bodies,titles,descriptions,link_urls,ad_formats,call_to_action_types,optimization_type},url_tags,link_url"
     }
     data = await make_api_request(endpoint, access_token, params)
 
@@ -347,13 +347,45 @@ async def get_ad_creatives(ad_id: str, access_token: Optional[str] = None) -> st
         
     endpoint = f"{ad_id}/adcreatives"
     params = {
-        "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,asset_feed_spec,image_urls_for_viewing"
+        "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,object_type,body,title,effective_object_story_id,asset_feed_spec,url_tags,image_urls_for_viewing"
     }
     
     data = await make_api_request(endpoint, access_token, params)
-    
-    # Add image URLs for direct viewing if available
+
     if 'data' in data:
+        # Resolve asset_feed_spec image hashes to URLs
+        image_hashes = set()
+        for creative in data['data']:
+            if 'asset_feed_spec' in creative and 'images' in creative['asset_feed_spec']:
+                for image in creative['asset_feed_spec']['images']:
+                    if 'hash' in image and 'url' not in image:
+                        image_hashes.add(image['hash'])
+
+        if image_hashes:
+            # Get account_id from the ad to look up image URLs
+            ad_data = await make_api_request(ad_id, access_token, {"fields": "account_id"})
+            account_id = ad_data.get("account_id")
+            if account_id:
+                hashes_str = json.dumps(list(image_hashes))
+                image_data = await make_api_request(
+                    f"act_{account_id}/adimages",
+                    access_token,
+                    {"fields": "hash,url,width,height", "hashes": hashes_str},
+                )
+                hash_to_url = {}
+                if 'data' in image_data:
+                    for img in image_data['data']:
+                        if 'hash' in img and 'url' in img:
+                            hash_to_url[img['hash']] = img['url']
+
+                if hash_to_url:
+                    for creative in data['data']:
+                        if 'asset_feed_spec' in creative and 'images' in creative['asset_feed_spec']:
+                            for image in creative['asset_feed_spec']['images']:
+                                if 'hash' in image and image['hash'] in hash_to_url:
+                                    image['url'] = hash_to_url[image['hash']]
+
+        # Add image URLs for direct viewing if available
         for creative in data['data']:
             creative['image_urls_for_viewing'] = extract_creative_image_urls(creative)
 
@@ -731,6 +763,40 @@ async def update_ad(
     endpoint = f"{ad_id}"
     try:
         data = await make_api_request(endpoint, access_token, params, method='POST')
+
+        # Check for FLEX creative image mismatch error (3858355)
+        if creative_id is not None and "error" in data:
+            error_obj = data.get("error", {})
+            if isinstance(error_obj, dict):
+                error_details = error_obj.get("details", {})
+                if isinstance(error_details, dict):
+                    inner_error = error_details.get("error", {})
+                    error_subcode = inner_error.get("error_subcode") if isinstance(inner_error, dict) else None
+                else:
+                    error_subcode = error_obj.get("error_subcode")
+            else:
+                error_subcode = None
+
+            if error_subcode == 3858355:
+                return json.dumps({
+                    "error": "Cannot swap creative on this ad due to FLEX image mismatch",
+                    "error_subcode": 3858355,
+                    "explanation": (
+                        "Meta requires the first image in the new creative's asset_feed_spec "
+                        "to match the image in its object_story_spec. When swapping a FLEX "
+                        "creative on an existing ad, this validation can fail if the new "
+                        "creative has different images than the original."
+                    ),
+                    "workaround": (
+                        "Create a new ad with the new creative instead of swapping: "
+                        "(1) call create_ad with the new creative_id and the same adset_id, "
+                        "(2) pause the old ad with update_ad(ad_id, status='PAUSED'). "
+                        "Note: this will lose social proof (likes, comments, shares) from the original ad."
+                    ),
+                    "ad_id": ad_id,
+                    "creative_id": creative_id
+                }, indent=2)
+
         return json.dumps(data, indent=2)
     except Exception as e:
         return json.dumps({"error": f"Failed to update ad: {str(e)}"}, indent=2)
@@ -943,7 +1009,8 @@ async def create_ad_creative(
     lead_gen_form_id: Optional[str] = None,
     instagram_actor_id: Optional[str] = None,
     ad_formats: Optional[List[str]] = None,
-    asset_customization_rules: Optional[List[Dict[str, Any]]] = None
+    asset_customization_rules: Optional[List[Dict[str, Any]]] = None,
+    creative_features_spec: Optional[Dict[str, Any]] = None
 ) -> str:
     """
     Create a new ad creative using an uploaded image hash or video ID.
@@ -989,6 +1056,13 @@ async def create_ad_creative(
                    ["AUTOMATIC_FORMAT"] (Flexible format). For video creatives, defaults to
                    ["SINGLE_VIDEO"]. Otherwise defaults to ["SINGLE_IMAGE"].
         asset_customization_rules: List of placement-specific asset overrides for asset_feed_spec.
+        creative_features_spec: Advantage+ Creative feature opt-ins/opt-outs. Controls individual
+                   creative enhancements like image_touchups, text_optimizations, inline_comment,
+                   add_text_overlay, music, 3d_animation, etc. Each feature is a dict with
+                   "enroll_status" set to "OPT_IN" or "OPT_OUT".
+                   Example: {"image_touchups": {"enroll_status": "OPT_IN"},
+                            "inline_comment": {"enroll_status": "OPT_IN"}}
+                   Sent to Meta as degrees_of_freedom_spec.creative_features_spec.
                    Lets you assign different images or videos to specific placement groups
                    (e.g., feed vs. stories). Only valid with image_hashes or plural asset params.
                    Each rule uses a user-friendly format that is automatically translated to
@@ -1021,6 +1095,14 @@ async def create_ad_creative(
             _parsed = json.loads(asset_customization_rules)
             if isinstance(_parsed, list):
                 asset_customization_rules = _parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if isinstance(creative_features_spec, str):
+        try:
+            _parsed = json.loads(creative_features_spec)
+            if isinstance(_parsed, dict):
+                creative_features_spec = _parsed
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -1200,31 +1282,39 @@ async def create_ad_creative(
                     asset_customization_rules, images_array
                 )
 
-            # Determine ad_formats: use explicit value if provided, otherwise smart default.
-            if ad_formats:
-                resolved_ad_formats = ad_formats
-            elif is_video:
-                resolved_ad_formats = ["SINGLE_VIDEO"]
-            elif optimization_type == "DEGREES_OF_FREEDOM" and image_hashes:
-                resolved_ad_formats = ["AUTOMATIC_FORMAT"]
+            # ------------------------------------------------------------------
+            # Build asset_feed_spec base: DOF vs non-DOF use different patterns.
+            #
+            # DOF (DEGREES_OF_FREEDOM / FLEX / Advantage+):
+            #   asset_feed_spec has ONLY: media, optimization_type, text variants.
+            #   URL, ad_formats, and CTA go in object_story_spec.link_data.
+            #   This matches the working Next.js duplication pattern — Meta's
+            #   own GET response omits link_urls/ad_formats/call_to_action_types
+            #   from asset_feed_spec, and the duplication passes it through AS-IS.
+            #   Including those fields causes Meta to silently ignore
+            #   asset_feed_spec for multi-image creatives.
+            #
+            # Non-DOF (regular Dynamic Creative):
+            #   asset_feed_spec includes link_urls, ad_formats, call_to_action_types
+            #   as before (this path is verified working).
+            # ------------------------------------------------------------------
+            if optimization_type:
+                asset_feed_spec = {"optimization_type": optimization_type}
+                # Only include ad_formats if explicitly provided by the caller
+                if ad_formats:
+                    asset_feed_spec["ad_formats"] = ad_formats
             else:
-                resolved_ad_formats = ["SINGLE_IMAGE"]
+                resolved_ad_formats = ad_formats or (["SINGLE_VIDEO"] if is_video else ["SINGLE_IMAGE"])
+                asset_feed_spec = {
+                    "link_urls": [{"website_url": link_url}],
+                    "ad_formats": resolved_ad_formats,
+                }
 
-            # Use asset_feed_spec for dynamic/FLEX creatives with multiple variants
-            asset_feed_spec = {
-                "link_urls": [{"website_url": link_url}],
-                "ad_formats": resolved_ad_formats
-            }
-
-            # Add media to asset_feed_spec
+            # Add media to asset_feed_spec (shared by both paths)
             if is_video:
                 asset_feed_spec["videos"] = videos_array
             else:
                 asset_feed_spec["images"] = images_array
-
-            # Add optimization_type for FLEX (Advantage+) creatives
-            if optimization_type:
-                asset_feed_spec["optimization_type"] = optimization_type
 
             # Handle headlines - Meta API uses "titles" not "headlines" in asset_feed_spec
             # Auto-promote singular headline to single-element array when in asset_feed_spec path
@@ -1246,8 +1336,8 @@ async def create_ad_creative(
             elif message:
                 asset_feed_spec["bodies"] = [{"text": message}]
 
-            # Add call_to_action_types if provided
-            if call_to_action_type:
+            # CTA in asset_feed_spec only for non-DOF (DOF puts CTA in link_data)
+            if call_to_action_type and not optimization_type:
                 asset_feed_spec["call_to_action_types"] = [call_to_action_type]
 
             # Add placement-specific asset customization rules if provided
@@ -1256,22 +1346,50 @@ async def create_ad_creative(
 
             creative_data["asset_feed_spec"] = asset_feed_spec
 
-            # For dynamic/FLEX creatives with asset_feed_spec, object_story_spec needs
-            # page_id. For non-video, the link URL is already in asset_feed_spec.link_urls
-            # so link_data is NOT added here (Meta rejects link_data without image_hash).
+            # ------------------------------------------------------------------
+            # Build object_story_spec for asset_feed_spec creatives.
+            # Meta rejects bare page_id (error 2061015) — needs a link anchor.
+            # ------------------------------------------------------------------
             if is_video:
-                # video_data does NOT support "link" directly — URL goes in
-                # call_to_action.value.link or is handled by asset_feed_spec.link_urls.
+                # Video FLEX: use video_data with call_to_action carrying
+                # the link URL. This is required for Meta to associate the
+                # video and destination URL with the creative.
                 video_anchor = {"video_id": video_id}
                 if thumbnail_url:
                     video_anchor["image_url"] = thumbnail_url
+                cta_type = call_to_action_type or "LEARN_MORE"
+                cta_value = {}
+                if link_url:
+                    cta_value["link"] = link_url
+                if lead_gen_form_id:
+                    cta_value["lead_gen_form_id"] = lead_gen_form_id
+                cta_data = {"type": cta_type}
+                if cta_value:
+                    cta_data["value"] = cta_value
+                video_anchor["call_to_action"] = cta_data
                 creative_data["object_story_spec"] = {
                     "page_id": page_id,
                     "video_data": video_anchor
                 }
             else:
+                # Image creative: build link_data anchor.
+                link_data = {"link": link_url}
+                if image_hashes:
+                    link_data["image_hash"] = image_hashes[0]
+                # DOF: put CTA in link_data (not in asset_feed_spec)
+                if optimization_type and call_to_action_type:
+                    cta = {"type": call_to_action_type}
+                    cta_value = {}
+                    if link_url:
+                        cta_value["link"] = link_url
+                    if lead_gen_form_id:
+                        cta_value["lead_gen_form_id"] = lead_gen_form_id
+                    if cta_value:
+                        cta["value"] = cta_value
+                    link_data["call_to_action"] = cta
                 creative_data["object_story_spec"] = {
-                    "page_id": page_id
+                    "page_id": page_id,
+                    "link_data": link_data,
                 }
         else:
             if is_video:
@@ -1351,6 +1469,13 @@ async def create_ad_creative(
         if dynamic_creative_spec:
             creative_data["dynamic_creative_spec"] = dynamic_creative_spec
 
+        # Add Advantage+ Creative feature opt-ins if provided.
+        # Only sent when the user explicitly passes creative_features_spec.
+        if creative_features_spec:
+            creative_data["degrees_of_freedom_spec"] = {
+                "creative_features_spec": creative_features_spec
+            }
+
         # instagram_actor_id → instagram_user_id migration (Jan 2026).
         # Meta deprecated instagram_actor_id; the replacement is instagram_user_id
         # inside object_story_spec (sibling of page_id and video_data/link_data).
@@ -1391,7 +1516,7 @@ async def create_ad_creative(
             creative_id = data["id"]
             creative_endpoint = f"{creative_id}"
             creative_params = {
-                "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,asset_feed_spec,url_tags,link_url"
+                "fields": "id,name,status,thumbnail_url,image_url,image_hash,object_story_spec,object_type,body,title,effective_object_story_id,asset_feed_spec{images,videos,bodies,titles,descriptions,link_urls,ad_formats,call_to_action_types,optimization_type},url_tags,link_url"
             }
 
             creative_details = await make_api_request(creative_endpoint, access_token, creative_params)
@@ -1506,11 +1631,12 @@ async def update_ad_creative(
         asset_feed_spec = {}
 
         # Determine ad_formats: use explicit value if provided, otherwise smart default.
-        # When using DEGREES_OF_FREEDOM, default to AUTOMATIC_FORMAT ("Flexible" in Ads Manager).
+        # NOTE: AUTOMATIC_FORMAT is NOT valid for creation/update — Meta silently
+        # ignores the entire asset_feed_spec when it encounters it.
+        # Always use SINGLE_IMAGE; Meta handles format selection automatically
+        # via optimization_type=DEGREES_OF_FREEDOM.
         if ad_formats:
             asset_feed_spec["ad_formats"] = ad_formats
-        elif optimization_type == "DEGREES_OF_FREEDOM":
-            asset_feed_spec["ad_formats"] = ["AUTOMATIC_FORMAT"]
         else:
             asset_feed_spec["ad_formats"] = ["SINGLE_IMAGE"]
 
